@@ -1,4 +1,5 @@
-Copyright (c) 2013 Christopher Currie
+Copyright (c) 2013 Christopher Currie <christopher@currie.com>
+Derived from Jade, Copyright (c) 2009-2010 TJ Holowaychuk <tj@vision-media.ca>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

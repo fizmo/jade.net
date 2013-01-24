@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using jade.net.utils;
 
 namespace jade.net
 {
@@ -19,13 +20,13 @@ namespace jade.net
             public string Code { get; set; }
             public bool Escape { get; set; }
             public Dictionary<string, object> Attrs { get; set; }
-            public Dictionary<string, object> Escaped { get; set; }
+            public Dictionary<string, bool> Escaped { get; set; }
             public bool SelfClosing { get; set; }
         }
 
         internal int LineNumber { get; private set; }
         private string _input;
-        public bool Pipeless { get; internal set; }
+        internal bool Pipeless { get; set; }
         private readonly List<Token> _deferredTokens;
         private readonly List<Token> _stash;
         private readonly List<int> _indentStack;
@@ -614,7 +615,7 @@ namespace jade.net
                 var len = str.Length;
                 var colons = _colons;
                 var states = new List<string> {"key"};
-                var escapedAttr = (object) false;
+                var escapedAttr = false;
                 var key = "";
                 var val = "";
                 char quote;
@@ -631,7 +632,7 @@ namespace jade.net
 
                 Consume(index + 1);
                 tok.Attrs = new Dictionary<string, object>();
-                tok.Escaped = new Dictionary<string, object>();
+                tok.Escaped = new Dictionary<string, bool>();
 
                 Action<char> parse = c =>
                     {

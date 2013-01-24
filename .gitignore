@@ -1,4 +1,5 @@
 _ReSharper*
 *.suo
+*.user
 obj/
 

@@ -1,7 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
-namespace jade.net
+namespace jade.net.utils
 {
     public static class Dictionary
     {

@@ -8,9 +8,5 @@
         }
 
         internal string Value { get; private set; }
-
-        internal bool IsText { get { return true; } }
-
-        public int Line { get; set; }
     }
 }

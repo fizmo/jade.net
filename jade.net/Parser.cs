@@ -2,6 +2,9 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using jade.net.nodes;
 
 namespace jade.net
@@ -10,19 +13,20 @@ namespace jade.net
     {
         private string _input;
         private readonly Lexer _lexer;
-        private string _filename;
-        private IDictionary<string, object> _blocks;
-        private readonly IDictionary<string, Node> _mixins;
-        private IDictionary<string, object> _options;
-        private readonly List<Parser> _contexts;
+        private readonly string _filename;
+        private IDictionary<string, Block> _blocks;
+        private IDictionary<string, Node> _mixins;
+        private readonly IDictionary<string, object> _options;
+        private List<Parser> _contexts;
+        private int? _spaces;
 
         private Parser Extending { get; set; }       
 
-        public static List<string> TextOnly { get; private set; }
+        internal static HashSet<string> TextOnly { get; private set; }
 
         static Parser()
         {
-            TextOnly = new List<string>{"script", "style"};
+            TextOnly = new HashSet<string>{"script", "style"};
         }
 
         public Parser(string str, string filename, IDictionary<string, object> options)
@@ -30,7 +34,7 @@ namespace jade.net
             _input = str;
             _lexer = new Lexer(str, options);
             _filename = filename;
-            _blocks = new Dictionary<string, object>();
+            _blocks = new Dictionary<string, Block>();
             _mixins = new Dictionary<string, Node>();
             _options = options;
             _contexts = new List<Parser> {this};
@@ -182,18 +186,38 @@ namespace jade.net
         {
             switch (Peek().Type)
             {
+                case "tag":
+                    return ParseTag();
+                case "mixin":
+                    return ParseMixin();
+                case "block":
+                    return ParseBlock();
                 case "case":
                     return ParseCase();
                 case "when":
                     return ParseWhen();
                 case "default":
                     return ParseDefault();
+                case "extends":
+                    return ParseExtends();
+                case "include":
+                    return ParseInclude();
                 case "doctype":
                     return ParseDoctype();
+                case "filter":
+                    return ParseFilter();
+                case "comment":
+                    return ParseComment();
                 case "text":
                     return ParseText();
+                case "each":
+                    return ParseEach();
                 case "code":
                     return ParseCode();
+                case "call":
+                    return ParseCall();
+                case "interpolation":
+                    return ParseInterpolation();
                 case "yield":
                     Advance();
                     return new Block {Yield = true};
@@ -350,25 +374,176 @@ namespace jade.net
             return node;
         }
 
-
-
-
-        private void ParseExtends()
+        /// <summary>
+        /// 'extends' name
+        /// </summary>
+        /// <returns></returns>
+        private Node ParseExtends()
         {
             if (_filename == null)
                 throw new Exception("the \"filename\" option is required to extend templates");
 
             var path = ((string) Expect("extends").Value).Trim();
-            var dir = "";//Path.Dirname(_filename);
+            var dir = Path.GetDirectoryName(_filename);
 
+            path = Path.Combine(dir, path + ".jade");
+            var str = File.ReadAllText(path, Encoding.UTF8);
+            var parser = new Parser(str, path, _options) {_blocks = _blocks, _contexts = _contexts};
+
+            Extending = parser;
+
+            // TODO: null node
+            return new Literal("");
         }
 
 
+        /// <summary>
+        /// 'block' name block
+        /// </summary>
+        /// <returns></returns>
+        private Block ParseBlock()
+        {
+            var blockTok = Expect("block");
+            var mode = blockTok.Mode;
+            var name = ((string) blockTok.Value).Trim();
+
+            var block = "indent" == Peek().Type ? Block() : new Block(new Literal(""));
+
+            var prev = _blocks[name];
+
+            if (prev != null)
+            {
+                switch (prev.Mode)
+                {
+                    case "append":
+                        block.Nodes = block.Nodes.Concat(prev.Nodes).ToList();
+                        prev = block;
+                        break;
+                    case "prepend":
+                        block.Nodes = prev.Nodes.Concat(block.Nodes).ToList();
+                        prev = block;
+                        break;
+                }
+            }
+
+            block.Mode = mode;
+            return _blocks[name] = prev ?? block;
+        }
+
+        /// <summary>
+        /// include block?
+        /// </summary>
+        /// <returns></returns>
+        private Node ParseInclude()
+        {
+            var path = ((string) Expect("include").Value).Trim();
+            var dir = Path.GetDirectoryName(path) ?? "";
+
+            if (_filename == null)
+                throw new Exception("the \"filename\" option is required to use includes");
+
+            // no extension
+            if (Path.GetExtension(path) == null)
+            {
+                path += ".jade";
+            }
+
+            path = Path.Combine(dir, path);
+            var str = File.ReadAllText(path, Encoding.UTF8);
+
+            // non-jade
+            if (".jade" != path.Substring(path.Length-6))
+            {
+                return new Literal(str);
+            }
+
+            var parser = new Parser(str, path, _options)
+                             {_blocks = new Dictionary<string, Block>(_blocks), _mixins = _mixins};
+
+            Context(parser);
+            var ast = parser.Parse();
+            Context();
+            ast.Filename = path;
+
+            if ("indent" == Peek().Type)
+            {
+                ast.IncludeBlock().Push(Block());
+            }
+
+            return ast;
+        }
+
+        /// <summary>
+        /// call ident block
+        /// </summary>
+        /// <returns></returns>
+        private Mixin ParseCall()
+        {
+            var tok = Expect("call");
+            var name = tok.Value.ToString();
+            var args = tok.Args;
+            var mixin = new Mixin(name, args, new Block(), true);
+
+            Tag(mixin);
+            if (mixin.Block.IsEmpty) mixin.Block = null;
+            return mixin;
+        }
+
+        /// <summary>
+        /// mixin block
+        /// </summary>
+        /// <returns></returns>
+        private Mixin ParseMixin()
+        {
+            var tok = Expect("mixin");
+            var name = tok.Value.ToString();
+            var args = tok.Args;
+
+            if ("indent" == Peek().Type)
+            {
+                var mixin = new Mixin(name, args, Block(), false);
+                _mixins[name] = mixin;
+                return mixin;
+            }
+            return new Mixin(name, args, null, true);
+        }
+
+        /// <summary>
+        /// indent (text | newline)* outdent
+        /// </summary>
+        /// <returns></returns>
         private Block ParseTextBlock()
         {
-            return null;
+            var block = new Block {Line = Line};
+            var spaces = (int) Expect("indent").Value;
+            if (null == _spaces) _spaces = spaces;
+            var indent = new string(' ', spaces - _spaces.Value + 1);
+            while ("outdent" != Peek().Type)
+            {
+                switch (Peek().Type)
+                {
+                    case "newline":
+                        Advance();
+                        break;
+                    case "indent":
+                        ParseTextBlock().Nodes.ForEach(block.Push);
+                        break;
+                    default:
+                        var text = new Text(indent + Advance().Value) {Line = Line};
+                        block.Push(text);
+                        break;
+                }   
+            }
+
+            if (spaces == _spaces.Value) _spaces = null;
+            Expect("outdent");
+            return block;
         }
 
+        /// <summary>
+        /// indent expr* outdent
+        /// </summary>
+        /// <returns></returns>
         private Block Block()
         {
             var block = new Block {Line = Line};
@@ -386,6 +561,149 @@ namespace jade.net
             }
             Expect("outdent");
             return block;
+        }
+
+        /// <summary>
+        /// interpolation (attrs | class | id)* (text | code | ':')? newline* block?
+        /// </summary>
+        /// <returns></returns>
+        private Tag ParseInterpolation()
+        {
+            var tok = Advance();
+            var tag = new Tag(tok.Value.ToString()) {Buffer = true};
+            return Tag(tag);
+        }
+
+        /// <summary>
+        /// tag (attrs | class | id)* (text | code | ':')? newline* block?
+        /// </summary>
+        /// <returns></returns>
+        private Tag ParseTag()
+        {
+            // ast-filter look-ahead
+            var i = 2;
+            if ("attrs" == Lookahead(i).Type) ++i;
+
+            var tok = Advance();
+            var tag = new Tag(tok.Value.ToString()) {SelfClosing = tok.SelfClosing};
+
+            return Tag(tag);
+        }
+
+        private static readonly Regex TypeRegex = new Regex("^['\"]|['\"]$");
+
+        /// <summary>
+        /// parse tag
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="tag"></param>
+        /// <returns></returns>
+        private T Tag<T>(T tag) where T : Attributes
+        {
+            var dot = false;
+
+            tag.Line = Line;
+
+            // (attrs | class | id)*
+            var done = false;
+            while (!done)
+            {
+                switch (Peek().Type)
+                {
+                    case "id":
+                    case "class":
+                        {
+                            var tok = Advance();
+                            tag.SetAttribute(tok.Type, "'" + tok.Value + "'");
+                            continue;
+                        }
+                    case "attrs":
+                        {
+                            var tok = Advance();
+                            var obj = tok.Attrs;
+                            var escaped = tok.Escaped;
+                            var names = obj.Keys;
+
+                            if (tok.SelfClosing) tag.SelfClosing = true;
+
+                            foreach (var name in names)
+                            {
+                                var val = obj[name];
+                                tag.SetAttribute(name, val.ToString(), escaped[name]);
+                            }
+                            continue;
+                        }
+                    default:
+                        done = true;
+                        break;
+                }
+            }
+
+            // check immediate '.'
+            if ("." == (string) Peek().Value)
+            {
+                dot = tag.TextOnly = true;
+                Advance();
+            }
+
+            // (text | code | ':')?
+            switch (Peek().Type)
+            {
+                case "text":
+                    tag.Block.Push(ParseText());
+                    break;
+                case "code":
+                    tag.Code = ParseCode();
+                    break;
+                case ":":
+                    Advance();
+                    tag.Block = new Block();
+                    tag.Block.Push(ParseExpr());
+                    break;
+            }
+
+            // newline*
+            while ("newline" == Peek().Type) Advance();
+
+            tag.TextOnly = tag.TextOnly || TextOnly.Contains(tag.Name);
+
+            // script special case
+            if ("script" == tag.Name)
+            {
+                var type = tag.GetAttribute("type");
+                if (!dot && type != null && "text/javascript" == TypeRegex.Replace(type, ""))
+                {
+                    tag.TextOnly = false;
+                }
+            }
+
+            // block?
+            if ("indent" == Peek().Type)
+            {
+                if (tag.TextOnly)
+                {
+                    _lexer.Pipeless = true;
+                    tag.Block = ParseTextBlock();
+                    _lexer.Pipeless = false;
+                }
+                else
+                {
+                    var block = Block();
+                    if (tag.Block != null)
+                    {
+                        foreach (var node in block.Nodes)
+                        {
+                            tag.Block.Push(node);
+                        }
+                    }
+                    else
+                    {
+                        tag.Block = block;
+                    }
+                }                
+            }
+
+            return tag;
         }
     }
 }

@@ -7,21 +7,19 @@ namespace jade.net.nodes
 {
     internal class Block : Node
     {
-        private List<Node> _nodes;
+        public List<Node> Nodes { get; internal set; }
 
         internal Block()
         {
-            _nodes = new List<Node>();
+            Nodes = new List<Node>();
         }
 
         internal Block(Node node)
             : this()
         {
             Debug.Assert(node != null);
-            _nodes.Push(node);
+            Nodes.Push(node);
         }
-
-        internal override bool Yield { get; set; }
 
         /// <summary>
         /// Block flag.
@@ -38,7 +36,7 @@ namespace jade.net.nodes
         /// <param name="other"></param>
         private void Replace(Block other)
         {
-            other._nodes = _nodes;
+            other.Nodes = Nodes;
         }
 
         /// <summary>
@@ -47,15 +45,15 @@ namespace jade.net.nodes
         /// <param name="node"></param>
         internal void Push(Node node)
         {
-            _nodes.Push(node);
+            Nodes.Push(node);
         }
 
         /// <summary>
         /// Check if this block is empty.
         /// </summary>
-        private bool IsEmpty
+        internal bool IsEmpty
         {
-            get { return 0 == _nodes.Count; }
+            get { return !Nodes.Any(); }
         }
 
         /// <summary>
@@ -64,17 +62,17 @@ namespace jade.net.nodes
         /// <param name="node"></param>
         internal void Unshift(Node node)
         {
-            _nodes.Unshift(node);
+            Nodes.Unshift(node);
         }
 
-        internal override Func<Node> IncludeBlock
+        internal Func<Block> IncludeBlock
         {
             get
             {
                 return () =>
                            {
-                               Node ret = this;
-                               foreach (var node in _nodes)
+                               var ret = this;
+                               foreach (var node in Nodes.OfType<Block>())
                                {
                                    if (node.Yield) return node;
                                    if (node.TextOnly) continue;
@@ -91,8 +89,16 @@ namespace jade.net.nodes
         internal override Node Clone()
         {
             var clone = new Block();
-            clone._nodes.AddRange(from node in _nodes select node.Clone());
+            clone.Nodes.AddRange(from node in Nodes select node.Clone());
             return clone;
         }
+
+        internal string Filename { get; set; }
+
+        internal string Mode { get; set; }
+
+        internal bool TextOnly { get; set; }
+
+        internal bool Yield { get; set; }
     }
 }
